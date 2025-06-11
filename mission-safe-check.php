@@ -48,6 +48,8 @@ class Mission_Safe_Check {
     public function init() {
         // Register custom option to store saved keywords
         register_setting( 'msc_options_group', 'msc_saved_keywords' );
+        add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend_highlight_script'));
+
     }
 
     public function add_admin_menu() {
@@ -69,6 +71,28 @@ class Mission_Safe_Check {
         wp_enqueue_style('msc-admin-style', plugin_dir_url(__FILE__) . 'css/admin.css');
 
     }
+
+    public function enqueue_frontend_highlight_script() {
+        if (is_admin()) return; // Bail if in admin
+
+        if (!isset($_GET['highlight']) || empty($_GET['highlight'])) return; // Only load if needed
+
+        wp_enqueue_script(
+            'msc-highlight',
+            plugin_dir_url(__FILE__) . 'js/frontend-highlight.js',
+            [],
+            null,
+            true
+        );
+        wp_enqueue_style(
+            'msc-highlight-style',
+            plugin_dir_url(__FILE__) . 'css/frontend-highlight.css',
+            [],
+            null
+        );
+    }
+
+
 
     public function admin_page_html() {
         include plugin_dir_path( __FILE__ ) . 'templates/admin-page.php';
@@ -98,7 +122,8 @@ class Mission_Safe_Check {
             foreach ( $query->posts as $post ) {
                 $results[] = [
                     'title' => get_the_title( $post ),
-                    'link' => get_permalink( $post ),
+                    'link'  => get_permalink( $post ),
+                    'type'  => get_post_type_object( $post->post_type )->labels->singular_name,
                     'id'    => $post->ID
                 ];
             }
