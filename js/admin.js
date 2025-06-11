@@ -17,12 +17,20 @@ jQuery(document).ready(function($) {
       tbody.empty();
 
       if (response.success && response.data.length) {
-        response.data.forEach(row => {
-          tbody.append(`<tr><td>${row.title}</td><td><a href="${row.link}" target="_blank">View</a></td></tr>`);
+        response.data.forEach(function(result) {
+          const rowHtml = `
+            <tr>
+              <td>${result.title}</td>
+              <td>${result.type}</td>
+              <td><a href="${result.link}?highlight=${encodeURIComponent(keyword)}" target="_blank">View</a></td>
+            </tr>
+          `;
+          tbody.append(rowHtml);
         });
       } else {
-        tbody.append('<tr><td colspan="2">No matches found.</td></tr>');
+        tbody.append('<tr><td colspan="3">No matches found.</td></tr>');
       }
+
 
       table.show();
       $('#msc-search-spinner').hide(); // Hide spinner after results
