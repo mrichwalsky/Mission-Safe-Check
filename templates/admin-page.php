@@ -28,6 +28,7 @@ $post_types = get_post_types(['public' => true], 'objects');
           <thead>
             <tr>
               <th>Title</th>
+              <th>Type</th>
               <th>Link</th>
             </tr>
           </thead>
@@ -104,7 +105,7 @@ $post_types = get_post_types(['public' => true], 'objects');
   <div style="width: 320px; flex-shrink: 0;">
     <div class="postbox" style="padding: 1em; margin-bottom: 1em;">
       <h2>About This Plugin</h2>
-      <p>This plugin helps your nonprofit monitor site content for sensitive or mission-critical phrases. Stay aligned with your values and protect your organization in uncertain times.</p>
+      <p>This plugin helps your nonprofit, institution, organization or business monitor site content for sensitive or mission-critical phrases. Stay aligned with your values and protect your organization in uncertain times.</p>
     </div>
     <div class="postbox" style="padding: 1em;">
       <h2>Brought to You By</h2>
