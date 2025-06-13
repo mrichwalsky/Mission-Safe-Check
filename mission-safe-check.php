@@ -16,6 +16,16 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit; // Exit if accessed directly.
 }
 
+//Include the needed files
+require_once __DIR__ . '/vendor/autoload.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-pdf2text.php';
+require_once plugin_dir_path(__FILE__) . 'includes/setup-pdf-tables.php';
+require_once plugin_dir_path(__FILE__) . 'includes/pdf-indexer.php';
+// Always include your indexing functions if AJAX is available
+require_once plugin_dir_path(__FILE__) . 'includes/media-indexer.php';
+
+
+
 class Mission_Safe_Check {
 
     public function __construct() {
@@ -49,6 +59,15 @@ class Mission_Safe_Check {
         // Register custom option to store saved keywords
         register_setting( 'msc_options_group', 'msc_saved_keywords' );
         add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend_highlight_script'));
+        register_setting( 'msc_options_group', 'msc_enable_media_scan', [
+            'type' => 'boolean',
+            'sanitize_callback' => function( $value ) {
+                return (bool) $value;
+            },
+            'default' => false,
+        ] );
+
+
 
     }
 
@@ -108,16 +127,17 @@ class Mission_Safe_Check {
             wp_send_json_error( 'No keyword provided' );
         }
 
+        $results = [];
+
+        // Search regular content
         $args = array(
-            'post_type' => 'any',
-            'post_status' => 'publish',
-            's' => $keyword,
-            'posts_per_page' => -1
+            'post_type'      => 'any',
+            'post_status'    => 'publish',
+            's'              => $keyword,
+            'posts_per_page' => -1,
         );
 
         $query = new WP_Query( $args );
-        $results = [];
-
         if ( $query->have_posts() ) {
             foreach ( $query->posts as $post ) {
                 $results[] = [
@@ -129,8 +149,29 @@ class Mission_Safe_Check {
             }
         }
 
-        wp_send_json_success( $results );
-    }
+        // Search PDF content if enabled
+        if ( get_option( 'msc_enable_media_scan' ) ) {
+            global $wpdb;
+            $table = $wpdb->prefix . 'msc_media_index';
+
+            $pdfs = $wpdb->get_results( $wpdb->prepare(
+                "SELECT attachment_id FROM $table WHERE content LIKE %s",
+                '%' . $wpdb->esc_like( $keyword ) . '%'
+            ) );
+
+            foreach ( $pdfs as $pdf ) {
+                $results[] = [
+                    'title' => get_the_title( $pdf->attachment_id ),
+                    'link'  => wp_get_attachment_url( $pdf->attachment_id ),
+                    'type'  => 'PDF Document',
+                    'id'    => $pdf->attachment_id
+                ];
+            }
+        }
+
+    wp_send_json_success( $results );
+}
+
 
     public function send_weekly_email() {
         $keywords = get_option( 'msc_saved_keywords', array() );
@@ -335,10 +376,13 @@ if (!function_exists('msc_send_weekly_email_from_db')) {
     }
 }
 
-
+function msc_media_scan_enabled() {
+    return get_option('msc_enable_media_scan', false);
+}
 
 // Set content type for HTML
 add_filter('wp_mail_content_type', 'msc_set_html_mail_type');
+
 function msc_set_html_mail_type($content_type) {
     return 'text/html';
 }
@@ -419,9 +463,11 @@ add_action('wp_ajax_msc_export_csv', function() {
         wp_die('No keywords selected.', '', array('response' => 400));
     }
 
+    global $wpdb;
     $results = [];
 
     foreach ($selected_keywords as $kw) {
+        // Search posts/pages
         $args = [
             'post_type' => !empty($selected_post_types) ? $selected_post_types : 'any',
             'post_status' => 'publish',
@@ -437,6 +483,25 @@ add_action('wp_ajax_msc_export_csv', function() {
                     'Title'     => get_the_title(),
                     'URL'       => get_permalink(),
                     'Post Type' => get_post_type()
+                ];
+            }
+        }
+
+        $include_pdfs = isset($_GET['include_pdfs']) && $_GET['include_pdfs'] === '1';
+
+        // Include PDFs if enabled
+        if ($include_pdfs && get_option('msc_enable_media_scan')) {
+            $table_name = $wpdb->prefix . 'msc_media_index';
+            $pdf_matches = $wpdb->get_results(
+                $wpdb->prepare("SELECT attachment_id, file_path FROM $table_name WHERE content LIKE %s", '%' . $wpdb->esc_like($kw) . '%')
+            );
+
+            foreach ($pdf_matches as $pdf) {
+                $results[] = [
+                    'Keyword'   => $kw,
+                    'Title'     => basename($pdf->file_path),
+                    'URL'       => wp_get_attachment_url($pdf->attachment_id),
+                    'Post Type' => 'PDF'
                 ];
             }
         }
@@ -457,3 +522,37 @@ add_action('wp_ajax_msc_export_csv', function() {
     fclose($output);
     exit;
 });
+
+
+function msc_scan_media_library_for_keywords($keywords) {
+    $matches = [];
+    $args = [
+        'post_type' => 'attachment',
+        'post_mime_type' => ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        'posts_per_page' => -1,
+        'post_status' => 'inherit'
+    ];
+
+    $query = new WP_Query($args);
+    foreach ($query->posts as $attachment) {
+        $file_path = get_attached_file($attachment->ID);
+        if (!file_exists($file_path)) continue;
+
+        $content = msc_extract_text_from_file($file_path);
+        foreach ($keywords as $keyword) {
+            if (stripos($content, $keyword) !== false) {
+                $matches[] = [
+                    'keyword' => $keyword,
+                    'title' => get_the_title($attachment),
+                    'link' => wp_get_attachment_url($attachment->ID),
+                    'post_type' => 'attachment'
+                ];
+                break; // Only list file once even if multiple keywords match
+            }
+        }
+    }
+    return $matches;
+}
+
+
+
