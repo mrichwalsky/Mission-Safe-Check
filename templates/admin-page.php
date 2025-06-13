@@ -2,9 +2,10 @@
 // templates/admin-page.php
 $keywords = msc_get_all_keywords();
 $post_types = get_post_types(['public' => true], 'objects');
+$media_scan_enabled = get_option('msc_enable_media_scan', false);
 ?>
 <!-- Full-width Header -->
-<div style="background-color: #660066; color: white; padding: 1em 2em; margin: 0 -20px 2em -20px;">
+<div class="msc-header">
   <h1 style="margin: 0;color:white;">Mission Safe Check</h1>
 </div>
 
@@ -28,6 +29,7 @@ $post_types = get_post_types(['public' => true], 'objects');
           <thead>
             <tr>
               <th>Title</th>
+              <th>Post Type</th>
               <th>Link</th>
             </tr>
           </thead>
@@ -40,12 +42,10 @@ $post_types = get_post_types(['public' => true], 'objects');
     <div id="msc-saved-keywords" class="postbox msc-box">
       <h2>Saved Keyword Reports</h2>
 
-        <p>Manage your saved keywords below. Click on a keyword to run a report.</p>
-
       <div style="margin-bottom: 1em;">
         <input type="text" id="msc-new-keyword" placeholder="Add new keyword" style="width: 300px; padding: 0.4em;" />
         <button id="msc-add-keyword" class="button">Add</button>
-        
+        <p class="description">Click a saved keyword to run a report. Use the × to remove it.</p>
       </div>
 
       <div id="msc-keyword-tags">
@@ -62,10 +62,10 @@ $post_types = get_post_types(['public' => true], 'objects');
 
     <!-- Email Test Section -->
     <div class="postbox msc-box">
-      <h3>Send Email Report</h3>
+      <h3>Send Test Email</h3>
       <div class="msc-test-email" style="margin-bottom: 1em; display: flex; gap: 10px; align-items: center;">
         <input type="email" id="msc_test_email" placeholder="Enter email address" style="width: 300px; padding: 5px; height: 36px;" />
-        <button id="msc_send_test_email" class="button button-primary" style="height: 36px;">Send Email</button>
+        <button id="msc_send_test_email" class="button button-primary" style="height: 36px;">Send Test Email</button>
         <span id="msc_test_status" style="margin-left:10px;"></span>
       </div>
     </div>
@@ -94,9 +94,40 @@ $post_types = get_post_types(['public' => true], 'objects');
           <?php endif; ?>
         <?php endforeach; ?>
 
+        <?php if ( get_option('msc_enable_media_scan') ) : ?>
+          <p style="margin-top: 1em;"><strong>Include PDF results?</strong></p>
+          <label style="display:block; margin-bottom: 4px;">
+            <input type="checkbox" name="include_pdfs" value="1" checked>
+            Yes, include results from scanned PDF files
+          </label>
+        <?php endif; ?>
+
+
         <br>
         <button type="submit" class="button">Download CSV Report</button>
       </form>
+    </div>
+
+    <!-- Media Scan Toggle -->
+    <div class="postbox msc-box">
+      <h3>Advanced Options</h3>
+      <form method="post" action="options.php">
+        <?php settings_fields('msc_options_group'); ?>
+        <label>
+          <input type="checkbox" name="msc_enable_media_scan" value="1" <?php checked($media_scan_enabled, true); ?> />
+          Enable scanning of PDF and Word document contents (may increase database size)
+        </label>
+        <br><br>
+        <?php submit_button('Save Settings'); ?>
+      </form>
+    </div>
+
+    <!-- PDF Reindexing Tool -->
+    <div class="postbox msc-box">
+      <h3>PDF Re-Indexing</h3>
+      <p>If you've added new PDF files or want to reindex existing ones, click below to refresh the index.</p>
+      <button id="msc-reindex-pdfs" class="button">Re-Index All PDFs</button>
+      <div id="msc-reindex-status" style="margin-top: 0.5em;"></div>
     </div>
   </div>
 
