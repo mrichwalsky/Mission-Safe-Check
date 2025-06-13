@@ -85,6 +85,22 @@ jQuery(document).ready(function($) {
     $('#msc-search-form').submit();
   });
 
+  $('#msc-reindex-pdfs').on('click', function () {
+  const status = $('#msc-reindex-status');
+  status.text('Indexing in progress…').css('color', 'black');
+
+  $.post(msc_ajax.ajax_url, {
+    action: 'msc_reindex_pdfs'
+  }, function (response) {
+    if (response.success) {
+      status.text(response.data).css('color', 'green');
+    } else {
+      status.text(response.data || 'Reindexing failed.').css('color', 'red');
+    }
+  });
+});
+
+
   // Send test email
   $('#msc_send_test_email').on('click', function() {
     const email = $('#msc_test_email').val().trim();
