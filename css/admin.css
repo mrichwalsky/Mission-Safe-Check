@@ -91,3 +91,14 @@
   border: 1px solid #ccd0d4;
   margin-bottom: 10px;
 }
+
+.msc-header{
+color:white;
+background: #660066;
+background: -webkit-linear-gradient(90deg, rgba(102, 0, 102, 1) 33%, rgba(255, 255, 255, 1) 100%);
+background: -moz-linear-gradient(90deg, rgba(102, 0, 102, 1) 33%, rgba(255, 255, 255, 1) 100%);
+background: linear-gradient(90deg, rgba(102, 0, 102, 1) 33%, rgba(255, 255, 255, 1) 100%);
+filter: progid:DXImageTransform.Microsoft.gradient(startColorstr="#660066", endColorstr="#FFFFFF", GradientType=1);
+padding: 1em 2em; 
+margin: 0 -20px 2em -20px;
+}
