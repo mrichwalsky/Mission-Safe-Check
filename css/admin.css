@@ -102,3 +102,32 @@ filter: progid:DXImageTransform.Microsoft.gradient(startColorstr="#660066", endC
 padding: 1em 2em; 
 margin: 0 -20px 2em -20px;
 }
+
+/* Responsive Layout Classes */
+.msc-layout-container {
+  display: flex;
+  gap: 2em;
+  margin-top: 0;
+}
+
+.msc-main-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.msc-sidebar {
+  width: 320px;
+  flex-shrink: 0;
+}
+
+/* Responsive: Stack layout on smaller screens */
+@media (max-width: 768px) {
+  .msc-layout-container {
+    flex-direction: column;
+    gap: 1em;
+  }
+
+  .msc-sidebar {
+    width: 100%;
+  }
+}

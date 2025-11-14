@@ -46,13 +46,85 @@ class Mission_Safe_Check {
     }
 
     public function activate() {
-        if ( ! wp_next_scheduled( 'msc_weekly_email_event' ) ) {
-            wp_schedule_event( time(), 'weekly', 'msc_weekly_email_event' );
-        }
+        $this->reschedule_email_cron();
     }
 
     public function deactivate() {
         wp_clear_scheduled_hook( 'msc_weekly_email_event' );
+    }
+
+    public function reschedule_email_cron() {
+        // Clear existing schedule
+        wp_clear_scheduled_hook( 'msc_weekly_email_event' );
+
+        // Schedule if enabled
+        if ( get_option( 'msc_email_schedule_enabled', false ) ) {
+            $frequency = get_option( 'msc_email_schedule_frequency', 'weekly' );
+            if ( ! wp_next_scheduled( 'msc_weekly_email_event' ) ) {
+                wp_schedule_event( time(), $frequency, 'msc_weekly_email_event' );
+            }
+        }
+    }
+
+    public function save_email_schedule() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Unauthorized' );
+        }
+
+        check_admin_referer( 'msc_save_email_schedule' );
+
+        $enabled = isset( $_POST['msc_email_schedule_enabled'] ) ? 1 : 0;
+        $frequency = sanitize_text_field( $_POST['msc_email_schedule_frequency'] ?? 'weekly' );
+        $recipient_input = sanitize_text_field( $_POST['msc_email_recipient'] ?? '' );
+
+        // Parse and validate comma-separated email addresses
+        $recipient = '';
+        if ( ! empty( $recipient_input ) ) {
+            $emails = array_map( 'trim', explode( ',', $recipient_input ) );
+            $valid_emails = [];
+            $invalid_emails = [];
+
+            foreach ( $emails as $email ) {
+                if ( empty( $email ) ) {
+                    continue; // Skip empty entries
+                }
+                $sanitized = sanitize_email( $email );
+                if ( is_email( $sanitized ) ) {
+                    $valid_emails[] = $sanitized;
+                } else {
+                    $invalid_emails[] = $email;
+                }
+            }
+
+            if ( ! empty( $invalid_emails ) ) {
+                // Show error and redirect back
+                wp_redirect( add_query_arg( 
+                    array( 
+                        'settings-updated' => 'false',
+                        'error' => 'invalid_emails',
+                        'invalid' => urlencode( implode( ', ', $invalid_emails ) )
+                    ), 
+                    admin_url( 'admin.php?page=mission-safe-check-email' ) 
+                ) );
+                exit;
+            }
+
+            $recipient = implode( ', ', $valid_emails );
+        }
+
+        // If no valid emails and enabled, use admin email as fallback
+        if ( empty( $recipient ) && $enabled ) {
+            $recipient = get_option( 'admin_email' );
+        }
+
+        update_option( 'msc_email_schedule_enabled', $enabled );
+        update_option( 'msc_email_schedule_frequency', $frequency );
+        update_option( 'msc_email_recipient', $recipient );
+
+        $this->reschedule_email_cron();
+
+        wp_redirect( add_query_arg( 'settings-updated', 'true', admin_url( 'admin.php?page=mission-safe-check-email' ) ) );
+        exit;
     }
 
     public function init() {
@@ -67,25 +139,68 @@ class Mission_Safe_Check {
             'default' => false,
         ] );
 
+        // Register email schedule settings
+        register_setting( 'msc_email_group', 'msc_email_schedule_enabled', [
+            'type' => 'boolean',
+            'sanitize_callback' => function( $value ) {
+                return (bool) $value;
+            },
+            'default' => false,
+        ] );
+        register_setting( 'msc_email_group', 'msc_email_schedule_frequency', [
+            'type' => 'string',
+            'sanitize_callback' => function( $value ) {
+                $allowed = ['daily', 'weekly', 'monthly'];
+                return in_array($value, $allowed) ? $value : 'weekly';
+            },
+            'default' => 'weekly',
+        ] );
+        register_setting( 'msc_email_group', 'msc_email_recipient', [
+            'type' => 'string',
+            'sanitize_callback' => 'sanitize_email',
+            'default' => '',
+        ] );
 
-
+        // Handle email schedule form submission
+        add_action('admin_post_msc_save_email_schedule', array($this, 'save_email_schedule'));
     }
 
     public function add_admin_menu() {
         add_menu_page(
             'Mission Safe Check',
-            'Mission Check',
+            'Mission Safe Check',
             'manage_options',
             'mission-safe-check',
             array( $this, 'admin_page_html' ),
             'dashicons-search',
             80
         );
+        
+        add_submenu_page(
+            'mission-safe-check',
+            'Email Settings',
+            'Email',
+            'manage_options',
+            'mission-safe-check-email',
+            array( $this, 'email_page_html' )
+        );
+        
+        add_submenu_page(
+            'mission-safe-check',
+            'Settings',
+            'Settings',
+            'manage_options',
+            'mission-safe-check-settings',
+            array( $this, 'settings_page_html' )
+        );
     }
 
     public function enqueue_assets() {
         wp_enqueue_script('msc-admin-script', plugin_dir_url(__FILE__) . 'js/admin.js', ['jquery'], null, true);
-        wp_localize_script('msc-admin-script', 'msc_ajax', ['ajax_url' => admin_url('admin-ajax.php')]);
+        wp_localize_script('msc-admin-script', 'msc_ajax', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('msc_ajax_nonce')
+        ]);
 
         wp_enqueue_style('msc-admin-style', plugin_dir_url(__FILE__) . 'css/admin.css');
 
@@ -117,10 +232,20 @@ class Mission_Safe_Check {
         include plugin_dir_path( __FILE__ ) . 'templates/admin-page.php';
     }
 
+    public function email_page_html() {
+        include plugin_dir_path( __FILE__ ) . 'templates/email-page.php';
+    }
+
+    public function settings_page_html() {
+        include plugin_dir_path( __FILE__ ) . 'templates/settings-page.php';
+    }
+
     public function ajax_search_content() {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( 'Unauthorized' );
         }
+
+        check_ajax_referer( 'msc_ajax_nonce', 'nonce' );
 
         $keyword = sanitize_text_field( $_POST['keyword'] ?? '' );
         if ( empty( $keyword ) ) {
@@ -141,10 +266,10 @@ class Mission_Safe_Check {
         if ( $query->have_posts() ) {
             foreach ( $query->posts as $post ) {
                 $results[] = [
-                    'title' => get_the_title( $post ),
-                    'link'  => get_permalink( $post ),
-                    'type'  => get_post_type_object( $post->post_type )->labels->singular_name,
-                    'id'    => $post->ID
+                    'title' => esc_html( get_the_title( $post ) ),
+                    'link'  => esc_url( get_permalink( $post ) ),
+                    'type'  => esc_html( get_post_type_object( $post->post_type )->labels->singular_name ),
+                    'id'    => absint( $post->ID )
                 ];
             }
         }
@@ -161,10 +286,10 @@ class Mission_Safe_Check {
 
             foreach ( $pdfs as $pdf ) {
                 $results[] = [
-                    'title' => get_the_title( $pdf->attachment_id ),
-                    'link'  => wp_get_attachment_url( $pdf->attachment_id ),
+                    'title' => esc_html( get_the_title( $pdf->attachment_id ) ),
+                    'link'  => esc_url( wp_get_attachment_url( $pdf->attachment_id ) ),
                     'type'  => 'PDF Document',
-                    'id'    => $pdf->attachment_id
+                    'id'    => absint( $pdf->attachment_id )
                 ];
             }
         }
@@ -241,6 +366,8 @@ $table = $wpdb->prefix . 'msc_keywords';
 add_action('wp_ajax_msc_add_keyword', function() use ($wpdb, $table) {
     if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
 
+    check_ajax_referer('msc_ajax_nonce', 'nonce');
+
     $keyword = sanitize_text_field($_POST['keyword'] ?? '');
     if (!$keyword) wp_send_json_error('No keyword provided');
 
@@ -250,7 +377,7 @@ add_action('wp_ajax_msc_add_keyword', function() use ($wpdb, $table) {
     $inserted = $wpdb->insert($table, [
         'keyword' => $keyword,
         'created_at' => current_time('mysql')
-    ]);
+    ], ['%s', '%s']);
 
     if ($inserted !== false) {
         wp_send_json_success();
@@ -263,10 +390,12 @@ add_action('wp_ajax_msc_add_keyword', function() use ($wpdb, $table) {
 add_action('wp_ajax_msc_delete_keyword', function() use ($wpdb, $table) {
     if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
 
+    check_ajax_referer('msc_ajax_nonce', 'nonce');
+
     $keyword = sanitize_text_field($_POST['keyword'] ?? '');
     if (!$keyword) wp_send_json_error('No keyword provided');
 
-    $deleted = $wpdb->delete($table, ['keyword' => $keyword]);
+    $deleted = $wpdb->delete($table, ['keyword' => $keyword], ['%s']);
     if ($deleted !== false) {
         wp_send_json_success();
     } else {
@@ -278,13 +407,59 @@ add_action('wp_ajax_msc_delete_keyword', function() use ($wpdb, $table) {
 function msc_get_all_keywords() {
     global $wpdb;
     $table = $wpdb->prefix . 'msc_keywords';
-    return $wpdb->get_col("SELECT keyword FROM $table ORDER BY keyword ASC");
+    $keywords = $wpdb->get_col("SELECT keyword FROM $table ORDER BY keyword ASC");
+    // Note: Keywords are sanitized when stored, but we escape on output
+    return $keywords;
+}
+
+// Helper function to generate email content using template
+function msc_generate_email_content($matches, $is_test = false) {
+    $report_title = $is_test ? 'Test: Mission Safe Check Report' : 'Mission Safe Check Report';
+    $site_name = get_bloginfo('name');
+    $report_date = date_i18n(get_option('date_format') . ' ' . get_option('time_format'));
+
+    // Format matches for template - convert to HTML links
+    $formatted_matches = [];
+    foreach ($matches as $kw => $posts) {
+        $formatted_matches[$kw] = [];
+        foreach ($posts as $post) {
+            if (is_array($post)) {
+                // Format as HTML link
+                $formatted_matches[$kw][] = '<a href="' . esc_url($post['link']) . '" style="color: #0867ec; text-decoration: none;">' . esc_html($post['title']) . '</a>';
+            } else {
+                // Plain text, convert to link if it's a URL
+                if (filter_var($post, FILTER_VALIDATE_URL)) {
+                    $formatted_matches[$kw][] = '<a href="' . esc_url($post) . '" style="color: #0867ec; text-decoration: none;">' . esc_html($post) . '</a>';
+                } else {
+                    $formatted_matches[$kw][] = esc_html($post);
+                }
+            }
+        }
+    }
+    
+    // Update $matches to use formatted version
+    $matches = $formatted_matches;
+
+    // Load template
+    $template_path = plugin_dir_path(__FILE__) . 'templates/email-report-template.php';
+    if (!file_exists($template_path)) {
+        return false;
+    }
+
+    ob_start();
+    include $template_path;
+    return ob_get_clean();
 }
 
 // Replaces get_option-based weekly email task with DB query
 add_action('msc_weekly_email_event', 'msc_send_weekly_email_from_db');
 
 function msc_send_weekly_email_from_db() {
+    // Check if scheduled emails are enabled
+    if (!get_option('msc_email_schedule_enabled', false)) {
+        return;
+    }
+
     global $wpdb;
     $table = $wpdb->prefix . 'msc_keywords';
 
@@ -305,7 +480,10 @@ function msc_send_weekly_email_from_db() {
         if ($query->have_posts()) {
             while ($query->have_posts()) {
                 $query->the_post();
-                $matches[$kw][] = get_the_title() . ' - ' . get_permalink();
+                $matches[$kw][] = [
+                    'title' => get_the_title(),
+                    'link' => get_permalink()
+                ];
             }
         }
     }
@@ -313,78 +491,39 @@ function msc_send_weekly_email_from_db() {
 
     if (empty($matches)) return;
 
-    $body = "Here are the latest matches for your saved keywords:\n\n";
-    foreach ($matches as $kw => $posts) {
-        $body .= "Keyword: $kw\n" . implode("\n", $posts) . "\n\n";
-    }
-
-    wp_mail(get_option('admin_email'), 'Weekly Mission Site Check Results', $body);
-}
-
-// Fix 1: Prevent duplicate declaration of msc_send_weekly_email_from_db()
-if (!function_exists('msc_send_weekly_email_from_db')) {
-    function msc_send_weekly_email_from_db($is_test = false) {
-        global $wpdb;
-        $table = $wpdb->prefix . 'msc_keywords';
-
-        $keywords = $wpdb->get_col("SELECT keyword FROM $table ORDER BY created_at DESC");
-        if (empty($keywords)) return 'No keywords found';
-
-        $matches = [];
-        foreach ($keywords as $kw) {
-            $query = new WP_Query([
-                'post_type' => 'any',
-                'post_status' => 'publish',
-                's' => $kw,
-                'posts_per_page' => -1
-            ]);
-            if ($query->have_posts()) {
-                while ($query->have_posts()) {
-                    $query->the_post();
-                    $matches[$kw][] = '<a href="' . get_permalink() . '">' . get_the_title() . '</a>';
-                }
+    $body = msc_generate_email_content($matches, false);
+    if (!$body) {
+        // Fallback to plain text
+        $body = "Here are the latest matches for your saved keywords:\n\n";
+        foreach ($matches as $kw => $posts) {
+            $body .= "Keyword: $kw\n";
+            foreach ($posts as $post) {
+                $body .= "  - " . (is_array($post) ? $post['title'] . ' - ' . $post['link'] : $post) . "\n";
             }
+            $body .= "\n";
         }
-        wp_reset_postdata();
-
-        if (empty($matches)) return 'No matches found';
-
-        ob_start();
-        ?>
-        <div style="font-family:sans-serif;">
-          <h2>Mission Safe Check - Weekly Report</h2>
-          <p>The following keywords were found in your site's public content:</p>
-          <ul>
-            <?php foreach ($matches as $kw => $posts) : ?>
-              <li><strong><?php echo esc_html($kw); ?></strong>
-                <ul>
-                  <?php foreach ($posts as $p) echo '<li>' . $p . '</li>'; ?>
-                </ul>
-              </li>
-            <?php endforeach; ?>
-          </ul>
-          <p style="color:#888; font-size:0.85em;">This is an automated email from Mission Safe Check.</p>
-        </div>
-        <?php
-        $body = ob_get_clean();
-
-        add_filter('wp_mail_content_type', fn() => 'text/html');
-        wp_mail(get_option('admin_email'), $is_test ? 'Test: Mission Safe Check Results' : 'Weekly Mission Safe Check Results', $body);
-        remove_filter('wp_mail_content_type', fn() => 'text/html');
-
-        return 'Email sent';
     }
+
+    $recipient_string = get_option('msc_email_recipient', get_option('admin_email'));
+    $frequency = get_option('msc_email_schedule_frequency', 'weekly');
+    $subject = ucfirst($frequency) . ' Mission Safe Check Results';
+
+    // Parse comma-separated recipients and send individual emails
+    $recipients = array_map('trim', explode(',', $recipient_string));
+    
+    add_filter('wp_mail_content_type', function() { return 'text/html'; });
+    
+    foreach ($recipients as $recipient) {
+        if (!empty($recipient) && is_email($recipient)) {
+            wp_mail($recipient, $subject, $body);
+        }
+    }
+    
+    remove_filter('wp_mail_content_type', function() { return 'text/html'; });
 }
 
 function msc_media_scan_enabled() {
     return get_option('msc_enable_media_scan', false);
-}
-
-// Set content type for HTML
-add_filter('wp_mail_content_type', 'msc_set_html_mail_type');
-
-function msc_set_html_mail_type($content_type) {
-    return 'text/html';
 }
 
 add_action('wp_ajax_msc_send_test_email', 'msc_send_test_email_ajax');
@@ -392,6 +531,8 @@ function msc_send_test_email_ajax() {
     if (!current_user_can('manage_options')) {
         wp_send_json_error('Unauthorized');
     }
+
+    check_ajax_referer('msc_ajax_nonce', 'nonce');
 
     $recipient = sanitize_email($_POST['test_email_to'] ?? '');
     if (empty($recipient) || !is_email($recipient)) {
@@ -414,38 +555,39 @@ function msc_send_test_email_ajax() {
         if ($query->have_posts()) {
             while ($query->have_posts()) {
                 $query->the_post();
-                $matches[$kw][] = '<a href="' . get_permalink() . '">' . get_the_title() . '</a>';
+                $matches[$kw][] = [
+                    'title' => get_the_title(),
+                    'link' => get_permalink()
+                ];
             }
         }
     }
     wp_reset_postdata();
 
-    // Load and populate template
-    $template = file_get_contents(plugin_dir_path(__FILE__) . 'templates/email-inlined.html');
-
-    $results_html = '';
-    if (!empty($matches)) {
-        foreach ($matches as $kw => $posts) {
-            $results_html .= '<p><strong>' . esc_html($kw) . '</strong><br>' . implode('<br>', $posts) . '</p>';
+    $body = msc_generate_email_content($matches, true);
+    if (!$body) {
+        // Fallback to plain text
+        $body = "Test: Mission Safe Check Report\n\n";
+        if (!empty($matches)) {
+            foreach ($matches as $kw => $posts) {
+                $body .= "Keyword: $kw\n";
+                foreach ($posts as $post) {
+                    $body .= "  - " . (is_array($post) ? $post['title'] . ' - ' . $post['link'] : $post) . "\n";
+                }
+                $body .= "\n";
+            }
+        } else {
+            $body .= "No matches found for your saved keywords.\n";
         }
-    } else {
-        $results_html = '<p>No matches found for your saved keywords.</p>';
     }
 
-    $email_body = str_replace([
-        'Hi there',
-        'Sometimes you just want to send a simple HTML email with a simple design and clear call to action. This is it.'
-    ], [
-        'Mission Safe Check – Test Report',
-        'Here are your keyword results:' . $results_html
-    ], $template);
-
     $subject = 'Test: Mission Safe Check Results';
-    $sent = wp_mail($recipient, $subject, $email_body);
-    remove_filter('wp_mail_content_type', 'msc_set_html_mail_type');
+    add_filter('wp_mail_content_type', function() { return 'text/html'; });
+    $sent = wp_mail($recipient, $subject, $body);
+    remove_filter('wp_mail_content_type', function() { return 'text/html'; });
 
     if ($sent) {
-        wp_send_json_success('Test email sent to ' . $recipient);
+        wp_send_json_success('Test email sent to ' . esc_html($recipient));
     } else {
         wp_send_json_error('Failed to send test email');
     }
@@ -454,6 +596,11 @@ function msc_send_test_email_ajax() {
 add_action('wp_ajax_msc_export_csv', function() {
     if (!current_user_can('manage_options')) {
         wp_die('Unauthorized', '', array('response' => 403));
+    }
+
+    // For GET requests, use wp_verify_nonce directly
+    if (!isset($_GET['nonce']) || !wp_verify_nonce($_GET['nonce'], 'msc_ajax_nonce')) {
+        wp_die('Security check failed', '', array('response' => 403));
     }
 
     $selected_keywords = isset($_GET['keywords']) ? array_map('sanitize_text_field', (array) $_GET['keywords']) : [];
